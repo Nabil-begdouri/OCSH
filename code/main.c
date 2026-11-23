@@ -3,13 +3,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
 #include "execution.h"
 #include "parser.h"
+#include "pipes.h"
+#include "jobs.h"
 
 #define MAX_COMMAND_LENGTH 1024
 #define MAX_ARGS 64
 
-void expand_variables(char *input, char *output, size_t size, int last_status)
+void expand_variables(char *input, char *output, size_t size,
+                      int last_status, pid_t last_background_pid)
 {
     size_t i = 0;
     size_t j = 0;
@@ -29,11 +34,26 @@ void expand_variables(char *input, char *output, size_t size, int last_status)
                 snprintf(status, sizeof(status), "%d", last_status);
 
                 size_t length = strlen(status);
-
                 if (length > size - 1 - j)
                     length = size - 1 - j;
 
                 memcpy(output + j, status, length);
+                j += length;
+                i++;
+                continue;
+            }
+
+            if (input[i] == '!')
+            {
+                char pid[32];
+                snprintf(pid, sizeof(pid), "%ld",
+                         (long)last_background_pid);
+
+                size_t length = strlen(pid);
+                if (length > size - 1 - j)
+                    length = size - 1 - j;
+
+                memcpy(output + j, pid, length);
                 j += length;
                 i++;
                 continue;
@@ -46,7 +66,8 @@ void expand_variables(char *input, char *output, size_t size, int last_status)
             {
                 i++;
 
-                while (input[i] != '\0' && input[i] != '}' && k < sizeof(variable) - 1)
+                while (input[i] != '\0' && input[i] != '}'
+                       && k < sizeof(variable) - 1)
                     variable[k++] = input[i++];
 
                 if (input[i] == '}')
@@ -54,7 +75,9 @@ void expand_variables(char *input, char *output, size_t size, int last_status)
             }
             else
             {
-                while ((isalnum((unsigned char)input[i]) || input[i] == '_') && k < sizeof(variable) - 1)
+                while ((isalnum((unsigned char)input[i])
+                        || input[i] == '_')
+                       && k < sizeof(variable) - 1)
                     variable[k++] = input[i++];
             }
 
@@ -85,13 +108,17 @@ void expand_variables(char *input, char *output, size_t size, int last_status)
     output[j] = '\0';
 }
 
-int main()
+int main(void)
 {
+    setup_jobs();
+
     char command[MAX_COMMAND_LENGTH];
     char expanded_command[MAX_COMMAND_LENGTH];
     char *commands[MAX_COMMANDS];
     char *args[MAX_ARGS];
+
     int last_status = 0;
+    pid_t last_background_pid = 0;
 
     while (1)
     {
@@ -106,21 +133,24 @@ int main()
 
         command[strcspn(command, "\n")] = '\0';
 
-        expand_variables(command, expanded_command, sizeof(expanded_command), last_status);
+        expand_variables(command, expanded_command,
+                         sizeof(expanded_command),
+                         last_status, last_background_pid);
 
-        int command_count = split_pipeline(expanded_command, commands, MAX_COMMANDS);
+        int command_count = split_pipeline(
+            expanded_command, commands, MAX_COMMANDS);
 
         if (command_count < 0)
         {
-            fprintf(stderr, "ocsh: invalid command or empty pipeline\n");
+            fprintf(stderr,
+                    "ocsh: invalid command or empty pipeline\n");
             last_status = 2;
             continue;
         }
 
         if (command_count > 1)
         {
-            printf("ocsh: pipes are not implemented yet\n");
-            last_status = 1;
+            last_status = execute_pipeline(commands, command_count);
             continue;
         }
 
@@ -129,12 +159,23 @@ int main()
 
         while (token != NULL && i < MAX_ARGS - 1)
         {
-            args[i] = token;
-            i++;
+            args[i++] = token;
             token = strtok(NULL, " \t");
         }
 
         args[i] = NULL;
+
+        if (i == 0)
+            continue;
+
+        int background = 0;
+
+        if (strcmp(args[i - 1], "&") == 0)
+        {
+            background = 1;
+            args[i - 1] = NULL;
+            i--;
+        }
 
         if (i == 0)
             continue;
@@ -171,7 +212,15 @@ int main()
             continue;
         }
 
-        last_status = execute_command(args);
+        if (background)
+        {
+            last_status = execute_background(
+                args, &last_background_pid);
+        }
+        else
+        {
+            last_status = execute_command(args);
+        }
     }
 
     return 0;

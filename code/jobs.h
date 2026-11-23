@@ -1,6 +1,9 @@
 #ifndef JOBS_H
 #define JOBS_H
 
-int execute_background(char *args[]);
+#include <sys/types.h>
+
+void setup_jobs(void);
+int execute_background(char *args[], pid_t *last_background_pid);
 
 #endif
