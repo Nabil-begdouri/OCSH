@@ -1,6 +1,6 @@
 #ifndef EXECUTION_H
 #define EXECUTION_H
 
-void execute_command(char **args);
+int execute_command(char **args);
 
 #endif

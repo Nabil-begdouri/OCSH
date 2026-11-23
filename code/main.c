@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 #include "execution.h"
 
 #define MAX_COMMAND_LENGTH 1024
@@ -11,6 +10,7 @@ int main()
 {
     char command[MAX_COMMAND_LENGTH];
     char *args[MAX_ARGS];
+    int last_status = 0;
 
     while (1)
     {
@@ -24,6 +24,11 @@ int main()
         }
 
         command[strcspn(command, "\n")] = '\0';
+        if (strcmp(command, "echo $?") == 0)
+        {
+            printf("%d\n", last_status);
+            continue;
+        }
 
         int i = 0;
         char *token = strtok(command, " \t");
@@ -46,7 +51,7 @@ int main()
             break;
         }
 
-        execute_command(args);
+        last_status = execute_command(args);
     }
 
     return 0;

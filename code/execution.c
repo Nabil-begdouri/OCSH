@@ -5,25 +5,39 @@
 
 #include "execution.h"
 
-void execute_command(char **args)
+int execute_command(char **args)
 {
+    if (args == NULL || args[0] == NULL)
+        return 0;
+
     pid_t pid = fork();
 
     if (pid < 0)
     {
         perror("ocsh: fork");
-        return;
+        return 1;
     }
 
     if (pid == 0)
     {
         execvp(args[0], args);
-
         perror("ocsh");
-        exit(EXIT_FAILURE);
+        _exit(127);
     }
-    else
+
+    int status;
+
+    if (waitpid(pid, &status, 0) == -1)
     {
-        waitpid(pid, NULL, 0);
+        perror("ocsh: waitpid");
+        return 1;
     }
+
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+
+    return 1;
 }
