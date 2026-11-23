@@ -133,6 +133,7 @@ int main()
             if (args[1] == NULL || strchr(args[1], '=') == NULL)
             {
                 printf("Usage: export NOM=valeur\n");
+                last_status = 1;
             }
             else
             {
@@ -140,7 +141,14 @@ int main()
                 *equal = '\0';
 
                 if (setenv(args[1], equal + 1, 1) != 0)
+                {
                     perror("export");
+                    last_status = 1;
+                }
+                else
+                {
+                    last_status = 0;
+                }
             }
 
             continue;
