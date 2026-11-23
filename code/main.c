@@ -180,7 +180,7 @@ int main(void)
         if (i == 0)
             continue;
 
-        if (strcmp(args[0], "exit") == 0)
+        if (strcmp(args[0], "quit") == 0)
         {
             printf("Goodbye!\n");
             break;
