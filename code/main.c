@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "execution.h"
+#include "parser.h"
 
 #define MAX_COMMAND_LENGTH 1024
 #define MAX_ARGS 64
@@ -88,6 +89,7 @@ int main()
 {
     char command[MAX_COMMAND_LENGTH];
     char expanded_command[MAX_COMMAND_LENGTH];
+    char *commands[MAX_COMMANDS];
     char *args[MAX_ARGS];
     int last_status = 0;
 
@@ -105,10 +107,25 @@ int main()
         command[strcspn(command, "\n")] = '\0';
 
         expand_variables(command, expanded_command, sizeof(expanded_command), last_status);
-        strcpy(command, expanded_command);
+
+        int command_count = split_pipeline(expanded_command, commands, MAX_COMMANDS);
+
+        if (command_count < 0)
+        {
+            fprintf(stderr, "ocsh: invalid command or empty pipeline\n");
+            last_status = 2;
+            continue;
+        }
+
+        if (command_count > 1)
+        {
+            printf("ocsh: pipes are not implemented yet\n");
+            last_status = 1;
+            continue;
+        }
 
         int i = 0;
-        char *token = strtok(command, " \t");
+        char *token = strtok(commands[0], " \t");
 
         while (token != NULL && i < MAX_ARGS - 1)
         {
