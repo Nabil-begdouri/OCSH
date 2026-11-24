@@ -1,0 +1,50 @@
+#!/usr/bin/env ocsh
+# Script de demonstration du jalon 6
+export NAME=World
+echo Hello $NAME
+
+# --- boucle for ---
+for f in a b c
+do
+  echo item $f
+done
+
+# --- boucle while avec compteur ---
+i=0
+while test $i -lt 3
+do
+  echo i=$i
+  i=$((i+1))
+done
+
+# --- if / else ---
+if test -f /etc/passwd
+then
+  echo passwd existe
+else
+  echo passwd absent
+fi
+
+if test -f /fichier/inexistant; then
+  echo mauvais
+else
+  echo else ok
+fi
+
+# --- imbrication + break / continue ---
+for n in 1 2 3 4 5
+do
+  if test $n -eq 2
+  then
+    continue
+  fi
+  if test $n -eq 4
+  then
+    break
+  fi
+  echo n=$n
+done
+
+# --- pipe dans un script ---
+say un deux trois -> wc -w
+echo fin $?
