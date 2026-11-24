@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <readline/readline.h>
+#include <readline/history.h>
+#include <unistd.h>
+#include <sys/wait.h>
 #include "execution.h"
 
 #define MAX_COMMAND_LENGTH 1024
@@ -11,6 +15,139 @@
 
 char history[HISTORY_SIZE][MAX_COMMAND_LENGTH];
 int history_count = 0;
+
+char *command_generator(const char *text, int state)
+{
+    static int index;
+    static char *commands[] = {"go", "path", "info", "say", "osinfo", "quit", "past", "export", "list", "show", "copy", "move", "del", "newdir", "newfile", NULL};
+    if (!state) index = 0;
+    while (commands[index])
+    {
+        char *command = commands[index++];
+        if (strncmp(command, text, strlen(text)) == 0)
+            return strdup(command);
+    }
+    return NULL;
+}
+
+char **command_completion(const char *text, int start, int end)
+{
+    (void)start;
+    (void)end;
+    return rl_completion_matches(text, command_generator);
+}
+
+
+
+void expand_command_substitution(char *input, char *output, size_t size)
+{
+    size_t i = 0, j = 0;
+
+    while (input[i] != '\0' && j < size - 1)
+    {
+        if ((input[i] == '$' && input[i + 1] == '(') || input[i] == '`')
+        {
+            int backtick = (input[i] == '`');
+            i += backtick ? 1 : 2;
+            int depth = backtick ? 0 : 1;
+            char inner[512];
+            size_t k = 0;
+
+            while (input[i] != '\0' && (backtick || depth > 0))
+            {
+                if (backtick)
+                {
+                    if (input[i] == '`')
+                    {
+                        i++;
+                        break;
+                    }
+                }
+                else
+                {
+                    if (input[i] == '(')
+                        depth++;
+                    else if (input[i] == ')')
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            i++;
+                            break;
+                        }
+                    }
+                }
+
+                if ((backtick || depth > 0) && k < sizeof(inner) - 1)
+                    inner[k++] = input[i];
+
+                i++;
+            }
+
+            inner[k] = '\0';
+
+            int pipefd[2];
+            if (pipe(pipefd) == -1)
+                continue;
+
+            pid_t pid = fork();
+
+            if (pid == 0)
+            {
+                close(pipefd[0]);
+                dup2(pipefd[1], STDOUT_FILENO);
+                close(pipefd[1]);
+
+                char *args[MAX_ARGS];
+                int argc = 0;
+                char *token = strtok(inner, " \t");
+
+                while (token != NULL && argc < MAX_ARGS - 1)
+                {
+                    args[argc++] = token;
+                    token = strtok(NULL, " \t");
+                }
+
+                args[argc] = NULL;
+
+                if (argc > 0)
+                    execute_command(args);
+
+                exit(0);
+            }
+            else if (pid > 0)
+            {
+                close(pipefd[1]);
+
+                char buffer[256];
+                ssize_t n;
+
+                while ((n = read(pipefd[0], buffer, sizeof(buffer))) > 0)
+                {
+                    for (ssize_t x = 0; x < n && j < size - 1; x++)
+                        output[j++] = buffer[x];
+                }
+
+                close(pipefd[0]);
+                waitpid(pid, NULL, 0);
+
+                while (j > 0 && output[j - 1] == '\n')
+                    j--;
+            }
+            else
+            {
+                close(pipefd[0]);
+                close(pipefd[1]);
+            }
+        }
+        else
+        {
+            output[j++] = input[i++];
+        }
+    }
+
+    output[j] = '\0';
+}
 
 void expand_variables(char *input, char *output, size_t size, int last_status)
 {
@@ -88,8 +225,48 @@ void expand_variables(char *input, char *output, size_t size, int last_status)
     output[j] = '\0';
 }
 
+
+void load_oschrc(void)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/.oschrc", getenv("HOME"));
+
+    FILE *file = fopen(path, "r");
+    if (file == NULL)
+        return;
+
+    char line[MAX_COMMAND_LENGTH];
+
+    while (fgets(line, sizeof(line), file))
+    {
+        line[strcspn(line, "\n")] = '\0';
+
+        if (line[0] == '\0' || line[0] == '#')
+            continue;
+
+        char *args[MAX_ARGS];
+        int i = 0;
+        char *token = strtok(line, " \t");
+
+        while (token != NULL && i < MAX_ARGS - 1)
+        {
+            args[i++] = token;
+            token = strtok(NULL, " \t");
+        }
+
+        args[i] = NULL;
+
+        if (i > 0)
+            execute_command(args);
+    }
+
+    fclose(file);
+}
+
 int main()
 {
+    load_oschrc();
+
     char command[MAX_COMMAND_LENGTH];
     char expanded_command[MAX_COMMAND_LENGTH];
     char *args[MAX_ARGS];
@@ -97,23 +274,30 @@ int main()
 
     while (1)
     {
-        printf("ocsh> ");
-        fflush(stdout);
+        
+        rl_attempted_completion_function = command_completion;
+        char *input_line = readline("ocsh> ");
 
-        if (fgets(command, sizeof(command), stdin) == NULL)
+        if (input_line == NULL)
         {
             printf("\n");
             break;
         }
 
-        command[strcspn(command, "\n")] = '\0';
+        add_history(input_line);
+        strncpy(command, input_line, sizeof(command) - 1);
+        command[sizeof(command) - 1] = '\0';
+        free(input_line);
         if (history_count < HISTORY_SIZE)
 {
     strcpy(history[history_count], command);
     history_count++;
 }
 
-        expand_variables(command, expanded_command, sizeof(expanded_command), last_status);
+        char command_substituted[MAX_COMMAND_LENGTH];
+
+        expand_command_substitution(command, command_substituted, sizeof(command_substituted));
+        expand_variables(command_substituted, expanded_command, sizeof(expanded_command), last_status);
         strcpy(command, expanded_command);
 
         int i = 0;
