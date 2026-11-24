@@ -5,6 +5,7 @@ TARGET = ocsh
 SOURCES = code/main.c \
           code/execution.c \
           code/parser.c \
+          code/variables.c \
           code/pipes.c \
           code/jobs.c
 
