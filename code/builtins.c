@@ -53,30 +53,28 @@ int execute_builtin(char **args)
     }
 
     if (strcmp(args[0], "go") == 0)
-{
-    char *home = getenv("HOME");
-
-    if (args[1] == NULL || strcmp(args[1], "~") == 0)
     {
-        if (home == NULL || chdir(home) != 0)
-        {
-            perror("cd");
-            return 1;
-        }
-    }
-    else
-    {
-        
-        if (chdir(args[1]) != 0)
-        {
-            perror("cd");
-            return 1;
-        }
-        
-    }
+        char *home = getenv("HOME");
 
-    return 0;
-}
+        if (args[1] == NULL || strcmp(args[1], "~") == 0)
+        {
+            if (home == NULL || chdir(home) != 0)
+            {
+                perror("cd");
+                return 1;
+            }
+        }
+        else
+        {
+            if (chdir(args[1]) != 0)
+            {
+                perror("cd");
+                return 1;
+            }
+        }
+
+        return 0;
+    }
 
     if (strcmp(args[0], "path") == 0)
     {
@@ -93,18 +91,20 @@ int execute_builtin(char **args)
     }
 
     if (strcmp(args[0], "info") == 0)
-{
-    printf("OCSH - Built-in commands\n");
-    printf("  go    : change directory\n");
-    printf("  quit  : exit shell\n");
-    printf("  path  : display current directory\n");
-    printf("  say   : display text\n");
-    printf("  info  : display help\n");
-    printf("  past  : display command history\n");
-    printf("  pipe  : connect commands\n");
-    printf("  osinfo: display OS information\n");
-    return 0;
-}
+    {
+        printf("OCSH - Built-in commands\n");
+        printf("  go    : change directory\n");
+        printf("  quit  : exit shell\n");
+        printf("  path  : display current directory\n");
+        printf("  say   : display text\n");
+        printf("  info  : display help\n");
+        printf("  past  : display command history\n");
+        printf("  pipe  : connect commands\n");
+        printf("  osinfo: display OS information\n");
+
+        return 0;
+    }
+
     if (strcmp(args[0], "say") == 0)
     {
         for (int i = 1; args[i] != NULL; i++)
@@ -118,13 +118,12 @@ int execute_builtin(char **args)
         printf("\n");
         return 0;
     }
+
     if (strcmp(args[0], "osinfo") == 0)
     {
         printf("Systèmes d’Exploitation -- UIR/ESIN\n");
         return 0;
     }
-
-
 
     return -1;
 }
