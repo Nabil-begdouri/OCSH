@@ -1,16 +1,22 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/wait.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include "pipes.h"
+#include "parser.h"   /* MAX_COMMANDS */
+#include "shell.h"    /* MAX_ARGS */
+#include "jobs.h"
 
-#define MAX_COMMANDS 16
-#define MAX_ARGS 64
-
-int execute_pipeline(char *commands[], int command_count)
+int execute_pipeline(char *commands[], int command_count,
+                     int background, const char *label, pid_t *last_pid)
 {
     if (commands == NULL || command_count <= 0)
         return 1;
@@ -21,11 +27,31 @@ int execute_pipeline(char *commands[], int command_count)
         return 1;
     }
 
+    if (background && !jobs_has_free_slot())
+    {
+        fprintf(stderr, "ocsh: too many background jobs\n");
+        return 1;
+    }
+
+    /* On bloque SIGCHLD pendant les fork() : si un fils se termine tres vite,
+       le signal reste en attente jusqu'a ce que le job soit enregistre. */
+    sigset_t block_mask;
+    sigset_t old_mask;
+
+    sigemptyset(&block_mask);
+    sigaddset(&block_mask, SIGCHLD);
+
+    if (sigprocmask(SIG_BLOCK, &block_mask, &old_mask) == -1)
+    {
+        perror("ocsh: sigprocmask");
+        return 1;
+    }
+
     int previous_fd = -1;
     int pipe_fd[2];
-    int status;
     pid_t pids[MAX_COMMANDS];
     int started = 0;
+    pid_t pgid = 0;   /* groupe de processus du job */
 
     for (int i = 0; i < command_count; i++)
     {
@@ -74,6 +100,41 @@ int execute_pipeline(char *commands[], int command_count)
 
         if (pid == 0)
         {
+            /* --- processus fils --- */
+
+            /* Le masque de signaux est herite par exec : on le remet. */
+            sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
+            /* Chaque job a son propre groupe de processus : c'est ce qui
+               permet d'envoyer Ctrl+C / Ctrl+Z au job seul, pas au shell.
+               pgid == 0 : le premier processus cree le groupe. */
+            setpgid(0, pgid);
+
+            /* Premier plan : le groupe prend le clavier (a faire AVANT de
+               remettre SIGTTOU par defaut, sinon le fils serait suspendu). */
+            if (!background && jobs_interactive())
+                tcsetpgrp(STDIN_FILENO, getpgrp());
+
+            /* Le shell ignore ces signaux et "ignore" survit a exec :
+               le fils doit retrouver le comportement par defaut. */
+            signal(SIGINT, SIG_DFL);
+            signal(SIGQUIT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+            signal(SIGTTIN, SIG_DFL);
+            signal(SIGTTOU, SIG_DFL);
+
+            if (background && previous_fd == -1)
+            {
+                /* Un job d'arriere-plan ne doit pas lire le clavier. */
+                int null_fd = open("/dev/null", O_RDONLY);
+
+                if (null_fd != -1)
+                {
+                    dup2(null_fd, STDIN_FILENO);
+                    close(null_fd);
+                }
+            }
+
             if (previous_fd != -1)
             {
                 if (dup2(previous_fd, STDIN_FILENO) == -1)
@@ -100,9 +161,17 @@ int execute_pipeline(char *commands[], int command_count)
 
             execvp(args[0], args);
 
-            perror("ocsh");
+            fprintf(stderr, "ocsh: %s: %s\n", args[0], strerror(errno));
             _exit(127);
         }
+
+        /* --- processus pere --- */
+
+        if (pgid == 0)
+            pgid = pid;
+
+        /* Fait aussi par le fils : evite une course entre les deux. */
+        setpgid(pid, pgid);
 
         pids[started++] = pid;
 
@@ -116,33 +185,24 @@ int execute_pipeline(char *commands[], int command_count)
         }
     }
 
-    int last_status = 0;
-
-    for (int i = 0; i < started; i++)
+    if (background)
     {
-        pid_t result;
+        int job_id = jobs_add(pids, started, label, pgid, 0);
 
-        do
-        {
-            result = waitpid(pids[i], &status, 0);
-        }
-        while (result == -1 && errno == EINTR);
+        sigprocmask(SIG_SETMASK, &old_mask, NULL);
 
-        if (result == -1)
-        {
-            perror("ocsh: waitpid");
-            last_status = 1;
-        }
-        else if (i == started - 1)
-        {
-            if (WIFEXITED(status))
-                last_status = WEXITSTATUS(status);
-            else if (WIFSIGNALED(status))
-                last_status = 128 + WTERMSIG(status);
-        }
+        if (last_pid != NULL)
+            *last_pid = pids[started - 1];
+
+        printf("[%d] %d\n", job_id, (int)pids[started - 1]);
+        return 0;
     }
 
-    return last_status;
+    sigprocmask(SIG_SETMASK, &old_mask, NULL);
+
+    /* Premier plan : on donne le terminal au groupe et on attend
+       (gere aussi Ctrl+Z : le job est alors enregistre comme "Stopped"). */
+    return jobs_wait_foreground(pgid, pids, started, label);
 
 error:
 
@@ -151,10 +211,14 @@ error:
 
     for (int i = 0; i < started; i++)
     {
+        kill(pids[i], SIGTERM);
+
         while (waitpid(pids[i], NULL, 0) == -1 && errno == EINTR)
         {
         }
     }
+
+    sigprocmask(SIG_SETMASK, &old_mask, NULL);
 
     return 1;
 }

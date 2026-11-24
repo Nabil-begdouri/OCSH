@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
@@ -20,8 +23,13 @@ int execute_command(char **args)
 
     if (pid == 0)
     {
+        /* Le shell ignore SIGINT ; "ignore" survit a exec, donc le fils
+           doit remettre le comportement par defaut pour que Ctrl+C
+           puisse le tuer. */
+        signal(SIGINT, SIG_DFL);
+
         execvp(args[0], args);
-        perror("ocsh");
+        fprintf(stderr, "ocsh: %s: %s\n", args[0], strerror(errno));
         _exit(127);
     }
 
@@ -37,7 +45,13 @@ int execute_command(char **args)
         return WEXITSTATUS(status);
 
     if (WIFSIGNALED(status))
+    {
+        /* Ctrl+C : le fils est mort, le shell reste en vie. */
+        if (WTERMSIG(status) == SIGINT)
+            printf("\n");
+
         return 128 + WTERMSIG(status);
+    }
 
     return 1;
 }
