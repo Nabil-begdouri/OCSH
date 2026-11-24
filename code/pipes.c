@@ -4,6 +4,7 @@
 #include <sys/wait.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 
 #include "pipes.h"
 
@@ -74,6 +75,8 @@ int execute_pipeline(char *commands[], int command_count)
 
         if (pid == 0)
         {
+            signal(SIGINT, SIG_DFL);
+
             if (previous_fd != -1)
             {
                 if (dup2(previous_fd, STDIN_FILENO) == -1)
@@ -151,9 +154,13 @@ error:
 
     for (int i = 0; i < started; i++)
     {
-        while (waitpid(pids[i], NULL, 0) == -1 && errno == EINTR)
+        pid_t result;
+
+        do
         {
+            result = waitpid(pids[i], NULL, 0);
         }
+        while (result == -1 && errno == EINTR);
     }
 
     return 1;

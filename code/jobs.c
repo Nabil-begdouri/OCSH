@@ -25,7 +25,13 @@ static void handle_sigchld(int signal_number)
     {
         if (background_pids[i] > 0)
         {
-            pid_t result = waitpid(background_pids[i], &status, WNOHANG);
+            pid_t result;
+
+            do
+            {
+                result = waitpid(background_pids[i], &status, WNOHANG);
+            }
+            while (result == -1 && errno == EINTR);
 
             if (result == background_pids[i] ||
                 (result == -1 && errno == ECHILD))
@@ -114,7 +120,10 @@ int execute_background(char *args[], pid_t *last_background_pid)
     printf("[%d] %d\n", slot + 1, pid);
 
     if (sigprocmask(SIG_SETMASK, &old_mask, NULL) == -1)
+    {
         perror("ocsh: sigprocmask");
+        return 1;
+    }
 
     return 0;
 }

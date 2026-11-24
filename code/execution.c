@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <signal.h>
+#include <errno.h>
 
 #include "execution.h"
 
@@ -20,14 +22,23 @@ int execute_command(char **args)
 
     if (pid == 0)
     {
+        signal(SIGINT, SIG_DFL);
+
         execvp(args[0], args);
         perror("ocsh");
         _exit(127);
     }
 
     int status;
+    pid_t result;
 
-    if (waitpid(pid, &status, 0) == -1)
+    do
+    {
+        result = waitpid(pid, &status, 0);
+    }
+    while (result == -1 && errno == EINTR);
+
+    if (result == -1)
     {
         perror("ocsh: waitpid");
         return 1;

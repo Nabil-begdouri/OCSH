@@ -1,9 +1,11 @@
 #define _POSIX_C_SOURCE 200809L
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "execution.h"
 #include "parser.h"
@@ -110,6 +112,9 @@ void expand_variables(char *input, char *output, size_t size,
 
 int main(void)
 {
+    /* Le shell ignore Ctrl+C pour ne pas se fermer. */
+    signal(SIGINT, SIG_IGN);
+
     setup_jobs();
 
     char command[MAX_COMMAND_LENGTH];
