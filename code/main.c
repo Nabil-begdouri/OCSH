@@ -1,71 +1,228 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <ctype.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <signal.h>
+#include <readline/readline.h>
 
-#include "execution.h"
 #include "parser.h"
 #include "pipes.h"
 #include "jobs.h"
+#include "script.h"
+#include "shell.h"
 #include "variables.h"
+#include "builtins.h"
+#include "history.h"
+#include "completion.h"
+#include "command_substitution.h"
+#include "redirections.h"
 
-#define MAX_COMMAND_LENGTH 1024
-#define MAX_ARGS 64
+int g_last_status = 0;
+pid_t g_last_background_pid = 0;
+int g_running = 1;
 
-int main(void)
+static int is_valid_name(const char *name, size_t length)
 {
-    /* Le shell ignore Ctrl+C pour ne pas se fermer. */
-    signal(SIGINT, SIG_IGN);
+    if (length == 0)
+        return 0;
 
-    setup_jobs();
+    if (!(isalpha((unsigned char)name[0]) || name[0] == '_'))
+        return 0;
 
-    char command[MAX_COMMAND_LENGTH];
-    char expanded_command[MAX_COMMAND_LENGTH];
+    for (size_t i = 1; i < length; i++)
+    {
+        if (!(isalnum((unsigned char)name[i]) || name[i] == '_'))
+            return 0;
+    }
+
+    return 1;
+}
+
+static int run_builtin(char **args, int *status)
+{
+    if (strcmp(args[0], "quit") == 0)
+    {
+        printf("Goodbye!\n");
+        g_running = 0;
+        *status = g_last_status;
+        return 1;
+    }
+
+    if (strcmp(args[0], "past") == 0)
+    {
+        display_custom_history();
+        *status = 0;
+        return 1;
+    }
+
+    if (strcmp(args[0], "export") == 0)
+    {
+        *status = execute_export(args);
+        return 1;
+    }
+
+    if (strcmp(args[0], "jobs") == 0)
+    {
+        jobs_print();
+        *status = 0;
+        return 1;
+    }
+
+    if (strcmp(args[0], "fg") == 0)
+    {
+        *status = jobs_fg(jobs_parse_id(args[1]));
+        return 1;
+    }
+
+    if (strcmp(args[0], "bg") == 0)
+    {
+        *status = jobs_bg(jobs_parse_id(args[1]));
+        return 1;
+    }
+
+    /* Redirections des builtins qui affichent du texte */
+    int is_output_builtin =
+        strcmp(args[0], "say") == 0 ||
+        strcmp(args[0], "path") == 0 ||
+        strcmp(args[0], "info") == 0 ||
+        strcmp(args[0], "osinfo") == 0;
+
+    if (is_output_builtin)
+    {
+        int saved_stdout = dup(STDOUT_FILENO);
+
+        if (saved_stdout == -1)
+        {
+            perror("ocsh: dup");
+            *status = 1;
+            return 1;
+        }
+
+        int redirection = handle_redirection(args);
+
+        if (redirection == -1)
+        {
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(saved_stdout);
+            *status = 1;
+            return 1;
+        }
+
+        *status = execute_builtin(args);
+
+        fflush(stdout);
+
+        if (dup2(saved_stdout, STDOUT_FILENO) == -1)
+        {
+            perror("ocsh: dup2");
+            *status = 1;
+        }
+
+        close(saved_stdout);
+        return 1;
+    }
+
+    int builtin_result = execute_builtin(args);
+
+    if (builtin_result != -1)
+    {
+        *status = builtin_result;
+        return 1;
+    }
+
+    /* Affectation NOM=valeur */
+    char *equal = strchr(args[0], '=');
+
+    if (equal != NULL && args[1] == NULL &&
+        is_valid_name(args[0], (size_t)(equal - args[0])))
+    {
+        *equal = '\0';
+
+        if (setenv(args[0], equal + 1, 1) != 0)
+        {
+            perror("ocsh");
+            *status = 1;
+        }
+        else
+        {
+            *status = 0;
+        }
+
+        return 1;
+    }
+
+    return 0;
+}
+
+int execute_line(const char *line)
+{
+    char substituted[MAX_COMMAND_LENGTH];
+    char arithmetic[MAX_COMMAND_LENGTH];
+    char expanded[MAX_COMMAND_LENGTH];
+    char label[MAX_COMMAND_LENGTH];
+    char single[MAX_COMMAND_LENGTH];
+    char work[MAX_COMMAND_LENGTH];
+
     char *commands[MAX_COMMANDS];
     char *args[MAX_ARGS];
 
-    int last_status = 0;
-    pid_t last_background_pid = 0;
+    expand_command_substitution((char *)line, substituted,
+                                sizeof(substituted));
 
-    while (1)
+    expand_arithmetic(substituted, arithmetic, sizeof(arithmetic));
+
+    expand_variables(arithmetic, expanded, sizeof(expanded),
+                     g_last_status, g_last_background_pid);
+
+    size_t length = strlen(expanded);
+
+    while (length > 0 && isspace((unsigned char)expanded[length - 1]))
+        expanded[--length] = '\0';
+
+    int background = 0;
+
+    if (length > 0 && expanded[length - 1] == '&')
     {
-        printf("ocsh> ");
-        fflush(stdout);
+        background = 1;
+        expanded[--length] = '\0';
 
-        if (fgets(command, sizeof(command), stdin) == NULL)
-        {
-            printf("\n");
-            break;
-        }
+        while (length > 0 && isspace((unsigned char)expanded[length - 1]))
+            expanded[--length] = '\0';
+    }
 
-        command[strcspn(command, "\n")] = '\0';
+    const char *start = expanded;
 
-        expand_variables(command, expanded_command,
-                         sizeof(expanded_command),
-                         last_status, last_background_pid);
+    while (isspace((unsigned char)*start))
+        start++;
 
-        int command_count = split_pipeline(
-            expanded_command, commands, MAX_COMMANDS);
+    if (*start == '\0' || *start == '#')
+        return g_last_status;
 
-        if (command_count < 0)
-        {
-            fprintf(stderr,
-                    "ocsh: invalid command or empty pipeline\n");
-            last_status = 2;
-            continue;
-        }
+    strncpy(label, start, sizeof(label) - 1);
+    label[sizeof(label) - 1] = '\0';
 
-        if (command_count > 1)
-        {
-            last_status = execute_pipeline(commands, command_count);
-            continue;
-        }
+    strncpy(work, start, sizeof(work) - 1);
+    work[sizeof(work) - 1] = '\0';
+
+    int command_count = split_pipeline(work, commands, MAX_COMMANDS);
+
+    if (command_count < 0)
+    {
+        fprintf(stderr, "ocsh: invalid command or empty pipeline\n");
+        g_last_status = 2;
+        return g_last_status;
+    }
+
+    if (command_count == 1 && !background)
+    {
+        strncpy(single, commands[0], sizeof(single) - 1);
+        single[sizeof(single) - 1] = '\0';
 
         int i = 0;
-        char *token = strtok(commands[0], " \t");
+        char *token = strtok(single, " \t");
 
         while (token != NULL && i < MAX_ARGS - 1)
         {
@@ -76,42 +233,86 @@ int main(void)
         args[i] = NULL;
 
         if (i == 0)
-            continue;
+            return g_last_status;
 
-        int background = 0;
+        int status = 0;
 
-        if (strcmp(args[i - 1], "&") == 0)
+        if (run_builtin(args, &status))
         {
-            background = 1;
-            args[i - 1] = NULL;
-            i--;
-        }
-
-        if (i == 0)
-            continue;
-
-        if (strcmp(args[0], "quit") == 0)
-        {
-            printf("Goodbye!\n");
-            break;
-        }
-
-        if (strcmp(args[0], "export") == 0)
-        {
-            last_status = execute_export(args);
-            continue;
-        }
-
-        if (background)
-        {
-            last_status = execute_background(
-                args, &last_background_pid);
+            g_last_status = status;
         }
         else
         {
-            last_status = execute_command(args);
+            char external[MAX_COMMAND_LENGTH] = "";
+            size_t used = 0;
+
+            for (int k = 0; args[k] != NULL; k++)
+            {
+                int written = snprintf(external + used,
+                                        sizeof(external) - used,
+                                        "%s%s", k == 0 ? "" : " ",
+                                        args[k]);
+
+                if (written < 0 ||
+                    (size_t)written >= sizeof(external) - used)
+                {
+                    fprintf(stderr, "ocsh: command too long\n");
+                    g_last_status = 1;
+                    return g_last_status;
+                }
+
+                used += (size_t)written;
+            }
+
+            char *external_commands[] = { external };
+
+            g_last_status = execute_pipeline(external_commands, 1, 0,
+                                             label, NULL);
         }
+
+        return g_last_status;
     }
 
-    return 0;
+    g_last_status = execute_pipeline(commands, command_count, background,
+                                     label, &g_last_background_pid);
+
+    return g_last_status;
+}
+
+int main(int argc, char *argv[])
+{
+    setup_jobs();
+
+    signal(SIGINT, SIG_IGN);
+    signal(SIGQUIT, SIG_IGN);
+
+    rl_attempted_completion_function = command_completion;
+
+    if (argc > 1)
+        return run_script(argv[1]);
+
+    while (g_running)
+    {
+        jobs_notify_finished();
+
+        char *command = readline("ocsh> ");
+
+        if (command == NULL)
+        {
+            printf("\n");
+            break;
+        }
+
+        if (command[0] != '\0')
+        {
+            add_custom_history(command);
+            execute_line(command);
+        }
+
+        free(command);
+    }
+
+    jobs_cleanup();
+
+    return g_last_status;
 }

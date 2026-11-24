@@ -1,9 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/wait.h>
-#include <signal.h>
-#include <errno.h>
 
 #include "execution.h"
 
@@ -25,7 +26,7 @@ int execute_command(char **args)
         signal(SIGINT, SIG_DFL);
 
         execvp(args[0], args);
-        perror("ocsh");
+        fprintf(stderr, "ocsh: %s: %s\n", args[0], strerror(errno));
         _exit(127);
     }
 
@@ -48,7 +49,12 @@ int execute_command(char **args)
         return WEXITSTATUS(status);
 
     if (WIFSIGNALED(status))
+    {
+        if (WTERMSIG(status) == SIGINT)
+            printf("\n");
+
         return 128 + WTERMSIG(status);
+    }
 
     return 1;
 }
