@@ -53,3 +53,11 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# OCSH local test files
+ocsh
+testdir/
+fichier_test.txt
+input.txt
+resultat.txt
+test.txt
