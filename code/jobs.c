@@ -110,6 +110,11 @@ int jobs_interactive(void)
     return interactive;
 }
 
+void jobs_disable_interactive(void)
+{
+    interactive = 0;
+}
+
 static void block_sigchld(sigset_t *old_mask)
 {
     sigset_t block_mask;

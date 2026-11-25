@@ -46,5 +46,5 @@ do
 done
 
 # --- pipe dans un script ---
-echo un deux trois -> wc -w
+say un deux trois -> wc -w
 echo fin $?

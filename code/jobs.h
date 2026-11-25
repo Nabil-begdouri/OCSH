@@ -10,6 +10,9 @@ void setup_jobs(void);
 /* 1 si le shell est interactif (stdin = terminal). */
 int jobs_interactive(void);
 
+/* Desactive le controle de terminal (utilise dans le fils de $(...)). */
+void jobs_disable_interactive(void);
+
 /* 1 s'il reste de la place dans la table des jobs. */
 int jobs_has_free_slot(void);
 

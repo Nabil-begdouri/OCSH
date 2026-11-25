@@ -1,9 +1,14 @@
 import os, pty, time, select, re, sys, signal
 
+# Chemin du shell compile : ce fichier est dans code/tests/, ocsh est a la
+# racine du projet (deux dossiers au-dessus). Fonctionne quel que soit
+# le dossier depuis lequel on lance le test.
+OCSH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ocsh")
+
 def spawn():
     pid, fd = pty.fork()
     if pid == 0:
-        os.execv("../ocsh", ["../ocsh"])
+        os.execv(OCSH, [OCSH])
     return pid, fd
 
 def read(fd, t=0.5):

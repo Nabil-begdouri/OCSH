@@ -16,7 +16,7 @@ SOURCES = code/main.c \
           code/history.c \
           code/command_substitution.c \
           code/completion.c \
-          code/oschrc.c
+          code/ocshrc.c
 
 OBJECTS = $(SOURCES:.c=.o)
 DEPENDS = $(OBJECTS:.o=.d)
