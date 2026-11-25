@@ -33,6 +33,8 @@ int execute_command(char **args)
 
         int builtin_status = execute_builtin(args);
 
+        fflush(stdout);
+
         if (builtin_status != -1)
             _exit(builtin_status);
 

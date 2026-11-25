@@ -11,13 +11,13 @@
 #include "completion.h"
 #include "variables.h"
 #include "command_substitution.h"
-#include "oschrc.h"
+#include "ocshrc.h"
 
 #define MAX_ARGS 64
 
 int main(void)
 {
-    load_oschrc();
+    load_ocshrc();
 
     char command[MAX_COMMAND_LENGTH];
     char expanded_command[MAX_COMMAND_LENGTH];

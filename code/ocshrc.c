@@ -4,17 +4,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "oschrc.h"
+#include "ocshrc.h"
 #include "execution.h"
 #include "history.h"
 
 #define MAX_ARGS 64
 
-void load_oschrc(void)
+void load_ocshrc(void)
 {
     char path[512];
 
-    snprintf(path, sizeof(path), "%s/.oschrc", getenv("HOME"));
+    snprintf(path, sizeof(path), "%s/.ocshrc", getenv("HOME"));
 
     FILE *file = fopen(path, "r");
 
