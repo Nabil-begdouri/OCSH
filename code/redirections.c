@@ -1,3 +1,14 @@
+/*
+ * redirections.c — Redirections d'entree/sortie (jalon 2).
+ *
+ *   cmd > fichier    stdout ecrase le fichier
+ *   cmd >> fichier   stdout ajoute a la fin du fichier
+ *   cmd < fichier    stdin lit le fichier
+ * On ouvre le fichier avec open(), puis dup2() le met a la place du
+ * descripteur 0 (stdin) ou 1 (stdout) : le programme ne sait meme pas
+ * qu'il ecrit dans un fichier.
+ */
+
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>

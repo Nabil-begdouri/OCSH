@@ -1,3 +1,14 @@
+/*
+ * command_substitution.c — Substitution de commande (jalon 5).
+ *
+ *   say $(path)        ->  say /home/user
+ *   say `whoami`       ->  say nabil
+ *
+ * La commande entre $( ) ou ` ` est executee dans un processus fils dont la
+ * sortie standard est branchee sur un tube ; le pere lit ce tube et remplace
+ * $(...) par le texte obtenu.
+ */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
@@ -10,6 +21,8 @@
 #include "shell.h"
 #include "jobs.h"
 
+/* Recopie input dans output en remplacant chaque $(...) ou `...`
+   par la sortie de la commande. size = taille du tampon output. */
 void expand_command_substitution(char *input, char *output, size_t size)
 {
     if (input == NULL || output == NULL || size == 0)
@@ -42,11 +55,15 @@ void expand_command_substitution(char *input, char *output, size_t size)
             continue;
         }
 
+        /* Debut d'une substitution : $( ou ` */
         if ((input[i] == '$' && input[i + 1] == '(') || input[i] == '`')
         {
             int backtick = (input[i] == '`');
             i += backtick ? 1 : 2;
 
+            /* On extrait la commande interieure dans 'inner'.
+               Pour $( ), on compte les parentheses (depth) pour trouver la ')' qui
+               ferme vraiment : $(echo $(pwd)) est donc gere. */
             int depth = backtick ? 0 : 1;
             char inner[512];
             size_t k = 0;
@@ -84,6 +101,7 @@ void expand_command_substitution(char *input, char *output, size_t size)
 
             inner[k] = '\0';
 
+            /* Tube : le fils ecrit dans pipefd[1], le pere lit dans pipefd[0] */
             int pipefd[2];
 
             if (pipe(pipefd) == -1)
@@ -96,6 +114,7 @@ void expand_command_substitution(char *input, char *output, size_t size)
 
             if (pid == 0)
             {
+                /* FILS : stdout -> tube (dup2), puis on ferme les descripteurs inutiles */
                 close(pipefd[0]);
                 dup2(pipefd[1], STDOUT_FILENO);
                 close(pipefd[1]);
@@ -112,6 +131,8 @@ void expand_command_substitution(char *input, char *output, size_t size)
             }
             else if (pid > 0)
             {
+                /* PERE : on ferme l'ecriture (sinon read n'aurait jamais EOF),
+                   puis on lit toute la sortie du fils et on la recopie dans output */
                 close(pipefd[1]);
 
                 size_t start_j = j;   /* debut du texte capture */
@@ -125,6 +146,7 @@ void expand_command_substitution(char *input, char *output, size_t size)
                 }
 
                 close(pipefd[0]);
+                /* On attend le fils pour qu'il ne reste pas zombie */
                 waitpid(pid, NULL, 0);
 
                 /* Comme bash : on retire les '\n' finaux, et les '\n'
@@ -140,12 +162,14 @@ void expand_command_substitution(char *input, char *output, size_t size)
             }
             else
             {
+                /* fork a echoue : on ferme le tube et on ignore la substitution */
                 close(pipefd[0]);
                 close(pipefd[1]);
             }
         }
         else
         {
+            /* Caractere normal : recopie tel quel */
             output[j++] = input[i++];
         }
     }

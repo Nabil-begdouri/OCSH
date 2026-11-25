@@ -1,3 +1,15 @@
+/*
+ * builtins.c — Commandes internes d'OCSH et alias (jalon 2).
+ *
+ * Builtins (codes dans le shell)      Alias (traduits vers une commande Linux)
+ *   go     = cd                         list    = ls      show    = cat
+ *   path   = pwd                        copy    = cp      move    = mv
+ *   say    = echo                       del     = rm      newdir  = mkdir
+ *   info   = help                       newfile = touch
+ *   osinfo = affiche le nom du cours
+ * (quit, export, jobs, fg, bg et past sont geres dans main.c)
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +30,8 @@ static const char *aliases[][2] = {
     { "newfile", "touch" },
 };
 
+/* Remplace le nom d'alias par la vraie commande, ex : list -> ls.
+   La commande sera ensuite lancee normalement avec execvp. */
 void translate_alias(char **args)
 {
     if (args == NULL || args[0] == NULL)
@@ -33,6 +47,8 @@ void translate_alias(char **args)
     }
 }
 
+/* Execute un builtin dans le processus courant.
+   Retourne son code de retour, ou -1 si args[0] n'est pas un builtin. */
 int execute_builtin(char **args)
 {
     if (args == NULL || args[0] == NULL)
@@ -42,6 +58,10 @@ int execute_builtin(char **args)
        correspondra ensuite, donc on retournera -1 et execvp fera le travail */
     translate_alias(args);
 
+    /* go [dossier] : change le repertoire courant avec chdir().
+       DOIT etre execute par le shell lui-meme : le repertoire courant est un
+       attribut du processus, un chdir() dans un fils serait perdu.
+       Sans argument (ou ~) : retour au dossier HOME. */
     if (strcmp(args[0], "go") == 0)
     {
         char *home = getenv("HOME");
@@ -66,6 +86,7 @@ int execute_builtin(char **args)
         return 0;
     }
 
+    /* path : affiche le repertoire courant (getcwd), comme pwd */
     if (strcmp(args[0], "path") == 0)
     {
         char cwd[1024];
@@ -80,6 +101,7 @@ int execute_builtin(char **args)
         return 0;
     }
 
+    /* info : aide, liste des commandes disponibles (comme help) */
     if (strcmp(args[0], "info") == 0)
     {
         printf("OCSH - Commandes disponibles\n");
@@ -104,6 +126,7 @@ int execute_builtin(char **args)
         return 0;
     }
 
+    /* say : affiche ses arguments separes par un espace (comme echo) */
     if (strcmp(args[0], "say") == 0)
     {
         for (int i = 1; args[i] != NULL; i++)
@@ -118,15 +141,20 @@ int execute_builtin(char **args)
         return 0;
     }
 
+    /* osinfo : builtin demande par l'enonce */
     if (strcmp(args[0], "osinfo") == 0)
     {
         printf("Systèmes d’Exploitation -- UIR/ESIN\n");
         return 0;
     }
 
+    /* Ce n'est pas un builtin : l'appelant lancera la commande avec execvp */
     return -1;
 }
 
+/* Version appelee dans un processus FILS, quand un builtin fait partie
+   d'un pipeline ou est lance en arriere-plan (ex : say hi -> wc -c).
+   Retourne -1 si ce n'est pas un builtin. */
 int execute_builtin_in_child(char **args)
 {
     if (args == NULL || args[0] == NULL)
