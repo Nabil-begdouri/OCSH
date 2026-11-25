@@ -1,3 +1,5 @@
+/* pipes.h — Execution des commandes et des pipelines (jalons 1 et 3). Code : pipes.c */
+
 #ifndef PIPES_H
 #define PIPES_H
 

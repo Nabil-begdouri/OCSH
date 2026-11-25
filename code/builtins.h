@@ -1,3 +1,5 @@
+/* builtins.h — Commandes internes d'OCSH et alias (jalon 2). Code : builtins.c */
+
 #ifndef BUILTINS_H
 #define BUILTINS_H
 

@@ -1,3 +1,5 @@
+/* shell.h — Constantes et etat global partages par tous les fichiers du shell */
+
 #ifndef SHELL_H
 #define SHELL_H
 
@@ -16,7 +18,7 @@ extern int   g_running;              /* passe a 0 apres la commande quit */
    Retourne le code de retour de la ligne. */
 int execute_line(const char *line);
 
-/* Expansion de $VAR, ${VAR}, $? et $! (definie dans main.c). */
+/* Expansion de $VAR, ${VAR}, $? et $! (definie dans variables.c). */
 void expand_variables(char *input, char *output, size_t size,
                       int last_status, pid_t last_background_pid);
 

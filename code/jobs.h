@@ -1,3 +1,5 @@
+/* jobs.h — Arriere-plan, signaux (SIGCHLD...) et job control (jalons 3 et 6). Code : jobs.c */
+
 #ifndef JOBS_H
 #define JOBS_H
 

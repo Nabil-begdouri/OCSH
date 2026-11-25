@@ -1,11 +1,37 @@
+"""
+test_jobs.py — Tests automatiques du job control d'OCSH (jalons 3 et 6).
+
+Le shell est lance dans un pseudo-terminal (pty), comme dans un vrai
+terminal, pour pouvoir lui envoyer Ctrl+C et Ctrl+Z. Le script verifie :
+  1. Ctrl+Z suspend la commande (etat T) et affiche "Stopped", $? = 148
+  2. bg relance le job en arriere-plan
+  3. fg le ramene au premier plan ; Ctrl+C le tue, le shell survit ($? = 130)
+  4. Ctrl+C au prompt ne tue pas un job d'arriere-plan
+  5. fg + Ctrl+Z + fg d'un job tue : pas de blocage
+  6. un pipeline entier peut etre suspendu, repris et tue
+  7. fg / bg sans job affichent une erreur
+  8. quit termine les jobs suspendus (pas d'orphelin)
+
+Utilisation (depuis la racine du projet, apres make) :
+    python3 code/tests/test_jobs.py
+Chaque test affiche PASS ou FAIL ; la derniere ligne donne le resultat global.
+"""
+
 import os, pty, time, select, re, sys, signal
 
+# Chemin du shell compile : ce fichier est dans code/tests/, ocsh est a la
+# racine du projet (deux dossiers au-dessus). Fonctionne quel que soit
+# le dossier depuis lequel on lance le test.
+OCSH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ocsh")
+
+# Lance ocsh dans un pseudo-terminal ; retourne (pid du shell, descripteur)
 def spawn():
     pid, fd = pty.fork()
     if pid == 0:
-        os.execv("../ocsh", ["../ocsh"])
+        os.execv(OCSH, [OCSH])
     return pid, fd
 
+# Lit tout ce que le shell affiche pendant t secondes
 def read(fd, t=0.5):
     out = b""
     end = time.time() + t
@@ -18,14 +44,18 @@ def read(fd, t=0.5):
             out += d
     return out.decode(errors="replace").replace("\r", "")
 
+# Envoie du texte au shell (\x03 = Ctrl+C, \x1a = Ctrl+Z) et lit la reponse
 def send(fd, s, t=0.6):
     os.write(fd, s.encode()); return read(fd, t)
 
+# Etat d'un processus lu dans /proc : S/R = actif, T = suspendu,
+# Z = zombie, "gone" = n'existe plus
 def state(pidstr):
     try:
         return open(f"/proc/{pidstr}/stat").read().split(")")[1].split()[0]
     except Exception: return "gone"
 
+# Affiche PASS ou FAIL pour un test ; ok passe a False au premier echec
 ok = True
 def check(name, cond, info=""):
     global ok

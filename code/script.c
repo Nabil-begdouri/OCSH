@@ -1,3 +1,20 @@
+/*
+ * script.c — Mode script : ./ocsh fichier.ocsh (jalon 6).
+ *
+ * Le fichier est lu en entier en memoire (une case par ligne), puis execute
+ * bloc par bloc. Chaque ligne simple est passee a execute_line() : un script
+ * peut donc utiliser tout ce que le shell sait faire (builtins, pipes, $VAR...).
+ *
+ * Structures reconnues (une par ligne, comme en Bash) :
+ *   if CONDITION ; then ... [else ...] fi
+ *   for VAR in mot1 mot2 ... ; do ... done
+ *   while CONDITION ; do ... done
+ *   break, continue, commentaires (#) et $((calcul))
+ *
+ * Une CONDITION est une commande : elle est vraie si elle retourne 0.
+ * Plan du fichier : 1. arithmetique  2. lecture  3. outils  4. execution
+ */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include <ctype.h>
@@ -23,14 +40,18 @@ typedef struct
     int error;
 } Calc;
 
+/* Declaration anticipee : calc_factor appelle calc_expr pour les parentheses */
 static long calc_expr(Calc *c);
 
+/* Saute les espaces dans l'expression */
 static void calc_skip(Calc *c)
 {
     while (isspace((unsigned char)*c->p))
         c->p++;
 }
 
+/* facteur : un nombre, une variable, (expression) ou -facteur.
+   C'est le niveau de priorite le plus fort. */
 static long calc_factor(Calc *c)
 {
     calc_skip(c);
@@ -61,6 +82,7 @@ static long calc_factor(Calc *c)
         return calc_factor(c);
     }
 
+    /* $i et i sont acceptes : on ignore le '$' devant un nom */
     if (*c->p == '$')
         c->p++;
 
@@ -83,6 +105,7 @@ static long calc_factor(Calc *c)
 
         name[k] = '\0';
 
+        /* Variable : sa valeur est convertie en nombre (0 si elle n'existe pas) */
         const char *value = getenv(name);
         return value != NULL ? strtol(value, NULL, 10) : 0;
     }
@@ -91,6 +114,8 @@ static long calc_factor(Calc *c)
     return 0;
 }
 
+/* terme : facteurs relies par * / %. Calcule AVANT + et -,
+   ce qui donne la bonne priorite : 2+3*4 = 2+(3*4) = 14. */
 static long calc_term(Calc *c)
 {
     long value = calc_factor(c);
@@ -126,6 +151,7 @@ static long calc_term(Calc *c)
     }
 }
 
+/* expression : termes relies par + et - (priorite la plus faible) */
 static long calc_expr(Calc *c)
 {
     long value = calc_term(c);
@@ -145,6 +171,8 @@ static long calc_expr(Calc *c)
     }
 }
 
+/* Remplace chaque $((expression)) de input par son resultat dans output.
+   Exemple : "say $((2+3))" devient "say 5". Appelee par execute_line(). */
 void expand_arithmetic(const char *input, char *output, size_t size)
 {
     size_t i = 0;
@@ -155,6 +183,7 @@ void expand_arithmetic(const char *input, char *output, size_t size)
 
     while (input[i] != '\0' && j < size - 1)
     {
+        /* Debut d'un calcul : $(( */
         if (input[i] == '$' && input[i + 1] == '(' && input[i + 2] == '(')
         {
             const char *start = input + i + 3;
@@ -190,6 +219,7 @@ void expand_arithmetic(const char *input, char *output, size_t size)
                 memcpy(expression, start, length);
                 expression[length] = '\0';
 
+                /* Calcul de l'expression ; erreur si syntaxe invalide ou division par zero */
                 Calc calc = { expression, 0 };
                 long value = calc_expr(&calc);
                 calc_skip(&calc);
@@ -201,6 +231,7 @@ void expand_arithmetic(const char *input, char *output, size_t size)
                     value = 0;
                 }
 
+                /* Le resultat est ecrit en texte a la place de $((...)) */
                 char number[32];
                 snprintf(number, sizeof(number), "%ld", value);
 
@@ -216,6 +247,7 @@ void expand_arithmetic(const char *input, char *output, size_t size)
             }
         }
 
+        /* Caractere normal : recopie tel quel */
         output[j++] = input[i++];
     }
 
@@ -232,11 +264,13 @@ typedef struct
     int count;
 } Script;
 
+/* Etat du script en cours d'execution */
 static const char *script_name = "script";
 static int script_failed = 0;   /* erreur de syntaxe : on arrete tout */
 static int loop_signal = 0;     /* 0 = rien, 1 = break, 2 = continue  */
 static int loop_depth = 0;      /* profondeur de boucles en cours      */
 
+/* Libere toutes les lignes du script */
 static void free_script(Script *script)
 {
     for (int i = 0; i < script->count; i++)
@@ -247,6 +281,9 @@ static void free_script(Script *script)
     script->count = 0;
 }
 
+/* Lit tout le fichier en memoire : script->lines[i] = ligne i.
+   getline() alloue chaque ligne ; le tableau s'agrandit avec realloc
+   (taille doublee a chaque fois). Retourne 0, ou -1 en cas d'erreur. */
 static int read_script(const char *path, Script *script)
 {
     FILE *file = fopen(path, "r");
@@ -264,10 +301,12 @@ static int read_script(const char *path, Script *script)
 
     while ((length = getline(&buffer, &buffer_size, file)) != -1)
     {
+        /* Retire les fins de ligne \n (Linux) et \r (fichiers Windows) */
         while (length > 0
                && (buffer[length - 1] == '\n' || buffer[length - 1] == '\r'))
             buffer[--length] = '\0';
 
+        /* Tableau plein : on double sa taille */
         if (script->count == capacity)
         {
             capacity = capacity ? capacity * 2 : 64;
@@ -308,6 +347,7 @@ static int read_script(const char *path, Script *script)
  *  3. Petits outils d'analyse
  * ====================================================================== */
 
+/* Saute les espaces au debut d'une chaine */
 static const char *skip_ws(const char *s)
 {
     while (isspace((unsigned char)*s))
@@ -316,6 +356,7 @@ static const char *skip_ws(const char *s)
     return s;
 }
 
+/* Supprime les espaces a la fin d'une chaine */
 static void rtrim(char *s)
 {
     size_t n = strlen(s);
@@ -334,6 +375,7 @@ static int word_is(const char *line, const char *word)
                || line[n] == ';');
 }
 
+/* Nom de variable valide pour for : lettre ou '_', puis lettres, chiffres, '_' */
 static int is_valid_name(const char *name)
 {
     if (!(isalpha((unsigned char)name[0]) || name[0] == '_'))
@@ -348,6 +390,8 @@ static int is_valid_name(const char *name)
     return 1;
 }
 
+/* Affiche une erreur de syntaxe avec le numero de ligne, puis arrete
+   le script (script_failed) avec le code 2, comme Bash. */
 static void syntax_error(int line_index, const char *message)
 {
     fprintf(stderr, "ocsh: %s: line %d: %s\n",
@@ -470,8 +514,12 @@ static int find_end(Script *script, int open, const char *closer,
  *  4. Execution d'un bloc de lignes [from, to)
  * ====================================================================== */
 
+/* Declaration anticipee : run_if / run_for / run_while appellent run_block
+   pour executer leur corps (les blocs peuvent etre imbriques). */
 static int run_block(Script *script, int from, int to);
 
+/* Execute un bloc if ... then ... [else ...] fi commencant a la ligne i.
+   Retourne l'index de la ligne apres le "fi" (ou -1 si erreur de syntaxe). */
 static int run_if(Script *script, int i, int to)
 {
     const char *line = skip_ws(script->lines[i]);
@@ -494,6 +542,7 @@ static int run_if(Script *script, int i, int to)
         return -1;
     }
 
+    /* Le bloc "then" s'arrete au "else" s'il existe, sinon au "fi" */
     int then_end = (else_index >= 0) ? else_index : fi;
     int start = body_start(script, i, inline_then, "then", then_end);
 
@@ -512,6 +561,9 @@ static int run_if(Script *script, int i, int to)
     return fi + 1;
 }
 
+/* Execute for VAR in mot1 mot2 ... ; do ... done.
+   Pour chaque mot : VAR prend sa valeur (setenv), puis le corps est execute.
+   Retourne l'index de la ligne apres le "done". */
 static int run_for(Script *script, int i, int to)
 {
     const char *line = skip_ws(script->lines[i]);
@@ -564,9 +616,11 @@ static int run_for(Script *script, int i, int to)
 
     for (int k = 0; k < word_count && g_running && !script_failed; k++)
     {
+        /* La variable de boucle est une variable d'environnement : $VAR marche dans le corps */
         setenv(variable, words[k], 1);
         run_block(script, start, done);
 
+        /* break : on sort de la boucle ; continue : on passe au mot suivant */
         if (loop_signal == 1)
         {
             loop_signal = 0;
@@ -581,6 +635,8 @@ static int run_for(Script *script, int i, int to)
     return done + 1;
 }
 
+/* Execute while CONDITION ; do ... done : tant que la condition retourne 0,
+   le corps est execute. Retourne l'index de la ligne apres le "done". */
 static int run_while(Script *script, int i, int to)
 {
     const char *line = skip_ws(script->lines[i]);
@@ -616,6 +672,7 @@ static int run_while(Script *script, int i, int to)
     {
         run_block(script, start, done);
 
+        /* break : on sort de la boucle ; continue : on reevalue la condition */
         if (loop_signal == 1)
         {
             loop_signal = 0;
@@ -630,6 +687,10 @@ static int run_while(Script *script, int i, int to)
     return done + 1;
 }
 
+/* Execute les lignes [from, to) du script, une par une.
+   Une ligne if / for / while est confiee a run_if / run_for / run_while, qui
+   retournent l'index de la ligne suivant leur bloc ; une ligne simple est
+   executee avec execute_line(). S'arrete sur quit, erreur, break ou continue. */
 static int run_block(Script *script, int from, int to)
 {
     int i = from;
@@ -688,6 +749,9 @@ static int run_block(Script *script, int from, int to)
     return g_last_status;
 }
 
+/* Point d'entree du mode script (appele par main quand on lance
+   ./ocsh fichier.ocsh). Retourne le code de retour du script :
+   2 si erreur de syntaxe, sinon le code de la derniere commande. */
 int run_script(const char *path)
 {
     Script script;

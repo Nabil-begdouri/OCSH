@@ -1,3 +1,5 @@
+/* script.h — Mode script et calcul $((...)) (jalon 6). Code : script.c */
+
 #ifndef SCRIPT_H
 #define SCRIPT_H
 

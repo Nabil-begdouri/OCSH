@@ -97,7 +97,7 @@ say `whoami`
 OCSH supports script execution through:
 
 ```bash
-./ocsh tests/demo.ocsh
+./ocsh code/tests/demo.ocsh
 ```
 
 The script interpreter supports:
@@ -138,13 +138,13 @@ OCSH/
 │   ├── script.h
 │   ├── ocshrc.c
 │   ├── ocshrc.h
-│   └── shell.h
-├── tests/
-│   ├── demo.ocsh
-│   └── test_jobs.py
+│   ├── shell.h
+│   └── tests/
+│       ├── demo.ocsh
+│       └── test_jobs.py
 ├── Makefile
 ├── README.md
-├── report.pdf
+├── rapport.pdf
 ├── demo.mp4
 └── .gitignore
 ```
@@ -207,7 +207,7 @@ ocsh>
 To execute a script:
 
 ```bash
-./ocsh tests/demo.ocsh
+./ocsh code/tests/demo.ocsh
 ```
 
 ## 7. Usage Examples
@@ -300,8 +300,8 @@ The project was developed collaboratively by three team members.
 ## 10. Livrables
 
 - `code/` : code source commenté
-- `report.pdf` : rapport (approche, difficultés, résultats, liens avec le cours)
-- `demo.mp4` : vidéo de démonstration (caméra ouverte)
+- `rapport.pdf` : rapport (introduction, approche, explication du code, difficultés, résultats, liens avec le cours)
+- `demo.mp4` : vidéo de démonstration présentant le travail et expliquant le code
 
 ## 11. Academic Context
 
@@ -314,6 +314,6 @@ The project was developed collaboratively by three team members.
 
 ```bash
 make
-./ocsh tests/demo.ocsh              # test du mode script
-cd tests && python3 test_jobs.py    # test du job control (pseudo-terminal)
+./ocsh code/tests/demo.ocsh        # test du mode script
+python3 code/tests/test_jobs.py    # test du job control (pseudo-terminal)
 ```

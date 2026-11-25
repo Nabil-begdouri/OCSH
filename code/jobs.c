@@ -1,3 +1,16 @@
+/*
+ * jobs.c — Arriere-plan, signaux et job control (jalons 3 et 6).
+ *
+ *   - commande &          : le job tourne en arriere-plan, le shell n'attend pas
+ *   - SIGCHLD             : le noyau previent le shell qu'un fils est termine ;
+ *                           le gestionnaire le recolte (waitpid) -> pas de zombie
+ *   - Ctrl+C / Ctrl+Z     : envoyes au groupe de processus au premier plan
+ *   - jobs / fg / bg      : lister, ramener au premier plan, relancer en fond
+ *
+ * Le shell garde une table de 64 jobs. Un job = une ligne de commande
+ * (une commande seule ou tout un pipeline), avec son groupe de processus.
+ */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
@@ -12,6 +25,7 @@
 #include "jobs.h"
 #include "parser.h"   /* MAX_COMMANDS */
 
+/* Taille maximale de la table des jobs et du texte memorise par job */
 #define MAX_JOBS 64
 #define MAX_JOB_COMMAND 256
 
@@ -28,6 +42,9 @@ typedef struct
     char command[MAX_JOB_COMMAND];
 } Job;
 
+/* Table des jobs, partagee avec le gestionnaire SIGCHLD.
+   Les champs modifies par le gestionnaire sont 'volatile sig_atomic_t'
+   (lecture/ecriture sures meme si un signal arrive au milieu). */
 static Job jobs[MAX_JOBS];
 
 static int interactive = 0;     /* stdin est un terminal ?     */
@@ -42,11 +59,14 @@ static void handle_sigchld(int signal_number)
 {
     (void)signal_number;
 
+    /* Le gestionnaire peut interrompre n'importe quel code : on sauvegarde
+       errno pour ne pas fausser une erreur en cours dans le programme. */
     int saved_errno = errno;
     int status;
 
     for (int j = 0; j < MAX_JOBS; j++)
     {
+        /* On ne s'occupe que des jobs vivants et non suspendus */
         if (!jobs[j].active || jobs[j].finished || jobs[j].stopped)
             continue;
 
@@ -57,6 +77,8 @@ static void handle_sigchld(int signal_number)
             if (pid <= 0)
                 continue;
 
+            /* WNOHANG : ne bloque pas. Retourne pid si ce fils est termine (il est
+               alors recolte : il ne reste pas zombie), 0 s'il tourne encore. */
             pid_t result = waitpid(pid, &status, WNOHANG);
 
             if (result == pid || (result == -1 && errno == ECHILD))
@@ -66,6 +88,7 @@ static void handle_sigchld(int signal_number)
             }
         }
 
+        /* Plus aucun processus vivant : le job est termine (affiche "Done" plus tard) */
         if (jobs[j].remaining <= 0)
             jobs[j].finished = 1;
     }
@@ -73,17 +96,23 @@ static void handle_sigchld(int signal_number)
     errno = saved_errno;
 }
 
+/* Initialisation, appelee une fois au demarrage du shell (main).
+   Installe le gestionnaire SIGCHLD et, en mode interactif, prepare le
+   shell pour le job control (groupe de processus et terminal). */
 void setup_jobs(void)
 {
     struct sigaction action = {0};
 
     action.sa_handler = handle_sigchld;
     sigemptyset(&action.sa_mask);
+    /* SA_RESTART  : un appel systeme interrompu (ex : readline) reprend tout seul
+       SA_NOCLDSTOP : pas de SIGCHLD quand un fils est seulement suspendu (Ctrl+Z) */
     action.sa_flags = SA_RESTART | SA_NOCLDSTOP;
 
     if (sigaction(SIGCHLD, &action, NULL) == -1)
         perror("ocsh: sigaction");
 
+    /* Mode interactif = l'entree est un vrai terminal (pas un script ni un pipe) */
     interactive = isatty(STDIN_FILENO);
 
     if (interactive)
@@ -101,20 +130,26 @@ void setup_jobs(void)
     }
     else
     {
+        /* Mode non interactif : pas de gestion du terminal */
         shell_pgid = getpgrp();
     }
 }
 
+/* Indique si le job control (terminal) est actif */
 int jobs_interactive(void)
 {
     return interactive;
 }
 
+/* Desactive la gestion du terminal (utilise dans le fils de $(...)) */
 void jobs_disable_interactive(void)
 {
     interactive = 0;
 }
 
+/* Bloque SIGCHLD (le signal est mis en attente, pas perdu) et sauvegarde
+   l'ancien masque dans old_mask pour pouvoir le retablir avec sigprocmask.
+   Sert a eviter que le gestionnaire modifie la table pendant qu'on la lit. */
 static void block_sigchld(sigset_t *old_mask)
 {
     sigset_t block_mask;
@@ -124,6 +159,7 @@ static void block_sigchld(sigset_t *old_mask)
     sigprocmask(SIG_BLOCK, &block_mask, old_mask);
 }
 
+/* Retourne 1 s'il reste une case libre dans la table des jobs */
 int jobs_has_free_slot(void)
 {
     for (int j = 0; j < MAX_JOBS; j++)
@@ -135,6 +171,9 @@ int jobs_has_free_slot(void)
     return 0;
 }
 
+/* Enregistre un nouveau job : ses PID, son texte et son groupe (pgid).
+   stopped = 1 si le job est deja suspendu (Ctrl+Z).
+   Retourne le numero du job (1, 2, ...) affiche par [n], ou -1 si plein. */
 int jobs_add(const pid_t *pids, int count, const char *command,
              pid_t pgid, int stopped)
 {
@@ -144,6 +183,7 @@ int jobs_add(const pid_t *pids, int count, const char *command,
     sigset_t old_mask;
     block_sigchld(&old_mask);
 
+    /* Recherche de la premiere case libre */
     int slot = -1;
 
     for (int j = 0; j < MAX_JOBS; j++)
@@ -168,6 +208,7 @@ int jobs_add(const pid_t *pids, int count, const char *command,
                 alive++;
         }
 
+        /* remaining = nombre de processus encore vivants dans le job */
         job->count = count;
         job->remaining = alive;
         job->finished = 0;
@@ -210,6 +251,8 @@ static int wait_pids(pid_t *pids, int count, int *stopped)
 
         do
         {
+            /* WUNTRACED : waitpid revient aussi quand le fils est SUSPENDU (Ctrl+Z),
+               pas seulement quand il se termine */
             result = waitpid(pids[i], &status, WUNTRACED);
         }
         while (result == -1 && errno == EINTR);
@@ -224,6 +267,7 @@ static int wait_pids(pid_t *pids, int count, int *stopped)
             continue;
         }
 
+        /* Le fils a ete suspendu par Ctrl+Z : code 128 + numero du signal */
         if (WIFSTOPPED(status))
         {
             *stopped = 1;
@@ -233,6 +277,7 @@ static int wait_pids(pid_t *pids, int count, int *stopped)
 
         pids[i] = 0;
 
+        /* Le code de retour d'un pipeline est celui de la DERNIERE commande ($?) */
         if (i == count - 1)
         {
             if (WIFEXITED(status))
@@ -252,12 +297,19 @@ static int wait_pids(pid_t *pids, int count, int *stopped)
     return *stopped ? stop_status : last_status;
 }
 
+/* Donne le terminal au groupe pgid (tcsetpgrp) : c'est ce groupe qui
+   recevra le clavier et les signaux Ctrl+C / Ctrl+Z. */
 static void give_terminal(pid_t pgid)
 {
     if (interactive)
         tcsetpgrp(STDIN_FILENO, pgid);
 }
 
+/* Attend un job lance au premier plan.
+   1) le terminal est donne au groupe du job (il recoit Ctrl+C / Ctrl+Z)
+   2) on attend ses processus
+   3) le shell reprend le terminal
+   Si le job a ete suspendu, il est ajoute a la table (pour fg / bg). */
 int jobs_wait_foreground(pid_t pgid, pid_t *pids, int count,
                          const char *label)
 {
@@ -284,6 +336,8 @@ int jobs_wait_foreground(pid_t pgid, pid_t *pids, int count,
  *  Notifications et builtins
  * -------------------------------------------------------------------- */
 
+/* Appelee avant chaque prompt : affiche "[n]+ Done" pour les jobs
+   d'arriere-plan termines, puis libere leur case. */
 void jobs_notify_finished(void)
 {
     sigset_t old_mask;
@@ -303,6 +357,7 @@ void jobs_notify_finished(void)
     sigprocmask(SIG_SETMASK, &old_mask, NULL);
 }
 
+/* Builtin jobs : liste les jobs avec leur etat (Running, Stopped, Done) */
 void jobs_print(void)
 {
     sigset_t old_mask;
@@ -326,6 +381,7 @@ void jobs_print(void)
     sigprocmask(SIG_SETMASK, &old_mask, NULL);
 }
 
+/* Convertit l'argument de fg / bg en numero de job : "2" ou "%2" -> 2 */
 int jobs_parse_id(const char *text)
 {
     if (text == NULL)
@@ -362,6 +418,9 @@ static int find_job(int id, int only_stopped)
     return -1;
 }
 
+/* Builtin fg [n] : ramene le job n (ou le plus recent) au premier plan.
+   On lui donne le terminal, on le reveille avec SIGCONT s'il etait
+   suspendu, puis on l'attend comme une commande normale. */
 int jobs_fg(int id)
 {
     /* SIGCHLD bloque : sinon le gestionnaire recolterait les fils
@@ -388,6 +447,8 @@ int jobs_fg(int id)
     if (job->stopped)
     {
         job->stopped = 0;
+        /* kill avec un PID negatif : le signal est envoye a TOUT le groupe
+           (toutes les commandes du pipeline) */
         kill(-job->pgid, SIGCONT);   /* reveille tout le groupe */
     }
 
@@ -411,6 +472,8 @@ int jobs_fg(int id)
     return status;
 }
 
+/* Builtin bg [n] : relance en arriere-plan un job suspendu par Ctrl+Z.
+   Il est reveille avec SIGCONT mais le shell ne l'attend pas. */
 int jobs_bg(int id)
 {
     sigset_t old_mask;
@@ -437,6 +500,9 @@ int jobs_bg(int id)
     return 0;
 }
 
+/* Appelee quand on quitte le shell (quit) : les jobs encore suspendus
+   recoivent SIGHUP (fin de session) puis SIGCONT pour pouvoir le traiter
+   et se terminer, au lieu de rester bloques pour toujours. */
 void jobs_cleanup(void)
 {
     for (int j = 0; j < MAX_JOBS; j++)
