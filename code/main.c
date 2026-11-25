@@ -43,6 +43,11 @@ int main(void)
 
         command[strcspn(command, "\n")] = '\0';
 
+        /* Ligne vide (ou seulement des espaces) : on reaffiche le prompt
+           sans message d'erreur, comme Bash. */
+        if (command[strspn(command, " \t")] == '\0')
+            continue;
+
         expand_variables(command, expanded_command,
                          sizeof(expanded_command),
                          last_status, last_background_pid);
@@ -64,16 +69,8 @@ int main(void)
             continue;
         }
 
-        int i = 0;
-        char *token = strtok(commands[0], " \t");
-
-        while (token != NULL && i < MAX_ARGS - 1)
-        {
-            args[i++] = token;
-            token = strtok(NULL, " \t");
-        }
-
-        args[i] = NULL;
+        /* Decoupage en mots en respectant les guillemets */
+        int i = tokenize(commands[0], args, MAX_ARGS);
 
         if (i == 0)
             continue;

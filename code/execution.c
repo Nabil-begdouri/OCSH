@@ -4,6 +4,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <errno.h>
+#include <string.h>
 
 #include "execution.h"
 
@@ -25,7 +26,9 @@ int execute_command(char **args)
         signal(SIGINT, SIG_DFL);
 
         execvp(args[0], args);
-        perror("ocsh");
+
+        /* execvp a echoue : on affiche le nom de la commande (comme Bash) */
+        fprintf(stderr, "ocsh: %s: %s\n", args[0], strerror(errno));
         _exit(127);
     }
 

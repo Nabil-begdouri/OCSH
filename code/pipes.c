@@ -7,8 +7,8 @@
 #include <signal.h>
 
 #include "pipes.h"
+#include "parser.h"
 
-#define MAX_COMMANDS 16
 #define MAX_ARGS 64
 
 int execute_pipeline(char *commands[], int command_count)
@@ -31,17 +31,9 @@ int execute_pipeline(char *commands[], int command_count)
     for (int i = 0; i < command_count; i++)
     {
         char *args[MAX_ARGS];
-        int j = 0;
 
-        char *token = strtok(commands[i], " \t");
-
-        while (token != NULL && j < MAX_ARGS - 1)
-        {
-            args[j++] = token;
-            token = strtok(NULL, " \t");
-        }
-
-        args[j] = NULL;
+        /* Decoupage en mots en respectant les guillemets */
+        tokenize(commands[i], args, MAX_ARGS);
 
         if (args[0] == NULL)
         {

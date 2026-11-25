@@ -15,10 +15,17 @@ void expand_variables(char *input, char *output, size_t size,
 
     size_t i = 0;
     size_t j = 0;
+    int in_single = 0;   /* entre '...' : pas d'expansion, comme Bash */
+    int in_double = 0;   /* entre "..." : une apostrophe ne compte pas */
 
     while (input[i] != '\0' && j < size - 1)
     {
-        if (input[i] != '$')
+        if (input[i] == '"' && !in_single)
+            in_double = !in_double;
+        else if (input[i] == '\'' && !in_double)
+            in_single = !in_single;
+
+        if (in_single || input[i] != '$')
         {
             output[j++] = input[i++];
             continue;
@@ -88,6 +95,10 @@ void expand_variables(char *input, char *output, size_t size,
         }
 
         variable[k] = '\0';
+
+        /* '$' seul (pas de nom apres) : on le garde tel quel */
+        if (k == 0 && j < size - 1)
+            output[j++] = '$';
 
         if (k > 0)
         {
